@@ -1,0 +1,333 @@
+---
+title: "610_Final_Project"
+author: "Sayali Pingle"
+date: "2024-12-07"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+dataset <- readRDS("~/parkingSSdata.rds")
+```
+
+
+
+# Introduction
+
+The dataset under analysis captures the commute patterns of employees from a large regional employer in North Carolina, based on parking card swipe data collected over one month. This analysis seeks to address two main scientific questions: 
+
+1. How do temporal factors, such as the day of the week, and spatial variables, including commute distance and employee location, influence total driving time (`tdrive`)?  
+2. What statistical model best explains the relationship between these factors and commute duration while addressing potential violations of model assumptions, such as heteroscedasticity and hierarchical data structure?  
+
+To answer these questions, a series of models were evaluated, including linear regression (`lm`), generalized linear mixed-effects models (`lmer` and `glmer`), and hierarchical models incorporating spatial correlations. Initial exploration revealed violations of constant variance in simpler models, prompting the use of mixed-effects frameworks to account for nested data structures and variability between employees and geographic locations. Ultimately, the generalized linear model (`glm`) with a Poisson distribution emerged as the most robust, achieving the lowest Bayesian Information Criterion (BIC) while maintaining interpretability and validity. These findings underscore the influence of both temporal and spatial factors on driving time and highlight the importance of model selection in capturing commute dynamics effectively.
+
+
+# Study Design
+
+The study was designed to analyze the commuting behavior of employees from a large regional employer in North Carolina. The dataset summarizes employee-level parking data collected over the course of one month. The data were aggregated from daily parking card swipe records, with each day an employee used their parking card counted as a "commute day." These commute days were further categorized by the days of the week to provide a detailed account of weekly commuting patterns.
+
+## Sample Size
+
+The dataset includes information from a sample of **1,154 employees**, each identified by a unique `id`. For each employee, the data contain **seven observations**, one for each day of the week, resulting in a total of 8,078 rows of data.
+
+## Explanatory Variables
+
+The dataset contains both macro-level and micro-level explanatory variables:
+
+### Macro-Level Variables
+
+1.  **Zip Code (`zip`)**: Represents the anonymized residential zip code of the employee. This variable captures geographic differences that may influence commuting patterns.\
+2.  **Commute Distance (`cdist`)**: The straight-line distance, in miles, from the centroid of the employee's home zip code to their workplace. This variable provides a quantitative measure of the distance each employee must travel to work.\
+3.  **Parking Permit Type (`ptype`)**: The type of parking permit the employee uses, which is linked to the parking lot assigned to them.
+
+### Micro-Level Variables
+
+1.  **Total Commute Days (`tdrive`)**: The total number of days the employee commuted to work by car in the given weekday during the month.\
+2.  **Day of the Week (`day`)**: Represents the weekday (e.g., Sun, Mon, Tue), allowing for analysis of commute patterns by specific days.
+
+## Data Collection
+
+The data were gathered using parking card swipe records, which track employee parking activity daily. This methodology ensures precise and reliable data regarding commuting frequency. The aggregation of commute days by day of the week facilitates the identification of temporal patterns in commuting behavior.
+
+## Study Considerations
+
+1.  **Time Frame**: The data reflect commuting behavior for a single month. The results may vary seasonally or across different months.
+2.  **Zip Code Anonymization**: Zip codes are anonymized, which limits the possibility of linking the data to specific geographic or demographic contexts.
+3.  **Fixed Weekday Structure**: The study assumes a consistent weekly structure, with the month containing 4 Sundays, Mondays, Tuesdays, and Saturdays, and 5 Wednesdays, Thursdays, and Fridays.
+
+This study design enables the exploration of both individual and group-level factors influencing commuting behavior, with a particular focus on geographic and temporal variables.
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+library(knitr)
+```
+
+## Exploratory Data Analysis
+
+```{r}
+
+# Filter for the top 10 zip codes by unique ID count
+top_zip_id_counts <- zip_id_counts %>%
+  top_n(20, id_count) %>%
+  arrange(desc(id_count))
+
+# Create the horizontal bar plot
+ggplot(top_zip_id_counts, aes(x = reorder(zip, id_count), y = id_count)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  coord_flip() +  # Flip coordinates for horizontal bars
+  labs(
+    title = "Top 20 Zip Codes by Number of Unique IDs",
+    x = "Zip Code",
+    y = "Number of Unique IDs"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 10),  # Adjust text size
+    axis.text.y = element_text(size = 10),  # Adjust text size
+    plot.title = element_text(size = 14, hjust = 0.5)  # Center title
+  )
+
+
+```
+
+This plot shows that multiple employees reside in specific `zip` codes, with the majority concentrated in `113`, `114`, and `119`. This observation highlights the plausibility of identifying geographic patterns, which can inform modeling strategies by including zip as a grouping variable in hierarchical or mixed-effects models
+
+```{r}
+# Histogram of commute distance
+ggplot(dataset, aes(x = cdist)) +
+  geom_histogram(binwidth = 3, fill = "steelblue", color = "black") +
+  labs(
+    title = "Distribution of Commute Distance",
+    x = "Commute Distance (miles)",
+    y = "Frequency"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+model1 <- lm(tdrive~ ptype+ zip+cdist+as.factor(day)+as.factor(id), data=dataset)
+```
+
+```{r}
+drop1(model1,test="F")
+```
+
+Here it is noticeable that the macro variables are not significant as they are confounded with id of the person.
+
+```{r}
+model2<- lm(tdrive~as.factor(day)+ as.factor(id), data= dataset)
+anova(model2)
+
+```
+
+### Checking Independence
+
+```{r}
+boxplot(residuals(model2) ~ dataset$day,
+        col = "lightblue",
+        main = "Residuals by Day",
+        xlab = "Day of the Week",
+        ylab = "Residuals")
+abline(h = 0, col = "red", lty = 2, lwd = 2)  # Reference line at 0
+
+
+```
+```{r}
+boxplot(residuals(model2) ~ dataset$id,
+        col = "lightblue",
+        main = "Residuals by id",
+        xlab = "Day of the Week",
+        ylab = "Residuals")
+abline(h = 0, col = "red", lty = 2, lwd = 2)  # Reference line at 0
+
+```
+```{r}
+# Calculate the mean residuals for each id
+mean_residuals <- tapply(residuals(model2), dataset$id, mean)
+
+# Plot the mean residuals against IDs
+plot(mean_residuals,
+     col = "blue",
+     pch = 16,
+     main = "Mean Residuals by ID",
+     xlab = "ID (Index)",
+     ylab = "Mean Residuals")
+abline(h = 0, col = "red", lty = 2, lwd = 2)  # Reference line at 0
+
+```
+```{r}
+# Calculate standard deviation of residuals for each id
+sd_residuals <- tapply(residuals(model2), dataset$id, sd)
+
+# Plot standard deviations of residuals against IDs
+plot(sd_residuals,
+     col = "blue",
+     pch = 16,
+     main = "Standard Deviation of Residuals by ID",
+     xlab = "ID (Index)",
+     ylab = "Standard Deviation of Residuals")
+abline(h = 0, col = "red", lty = 2, lwd = 2)  # Reference line at 0
+
+```
+from the above plot, the assumption of independence is met as the residuals grouped by day seems to follow along the mean residual.
+```{r}
+library(randtests)
+runs.test(residuals(model2))
+```
+
+
+### Checking Normality
+
+```{r}
+qqnorm(model2$residuals, main = "Q-Q Plot of Residuals")
+qqline(model2$residuals, col = "red")
+```
+
+The Q-Q plot shows that the residuals are approximately normally distributed, as most points align with the diagonal line. Deviations at the tails suggest potential outliers or heavier-than-normal tails, but overall the I see that the normality assumption is met.
+
+### Checking Constant Variance
+
+```{r}
+plot(fitted(model2), residuals(model2),
+     col = "blue",
+     pch = 16,
+     main = "Residuals vs. Fitted Values",
+     xlab = "Fitted Values",
+     ylab = "Residuals")
+abline(h = 0, col = "red", lty = 2, lwd = 2)
+
+```
+
+In the plot, we can observe a clear pattern in the residuals. The spread of the residuals seems to increase as the fitted values increase. This indicates that the variance of the residuals is not constant across different levels of the fitted values.
+
+# Model Fitting and Diagostics
+
+```{r}
+model3<- lmer(tdrive~ as.factor(day)+(1|id), data= dataset, REML= FALSE)
+```
+```{r}
+model4 <- lme(tdrive ~ as.factor(day),
+                    random = ~1 | zip/id,
+                    data = dataset)
+```
+```{r}
+model5<- lmer(tdrive~ as.factor(day) + cdist + (1|id), data= dataset)
+```
+```{r}
+model6 <- lmer(tdrive ~ as.factor(day)+ (1 | zip) + (1 | id), data = dataset, REML = FALSE)
+
+```
+```{r}
+model7 <- lmer(tdrive ~ as.factor(day) * cdist + (1 | id), data = dataset, REML = FALSE)
+
+```
+```{r}
+model8 <- lmer(tdrive ~ as.factor(day) + (1 | zip/day) + (1 | id), data = dataset, REML = FALSE)
+
+```
+```{r}
+# Load lme4 package for GLMM
+library(lme4)
+# Rescale the 'cdist' variable
+dataset$cdist_scaled <- scale(dataset$cdist)
+
+# Try a different optimizer (e.g., 'bobyqa')
+model_glmm <- glmer(tdrive ~ as.factor(day) + cdist_scaled + (1 | zip/id), 
+                    family = poisson(link = "log"), 
+                    data = dataset, 
+                    control = glmerControl(optimizer = "bobyqa"))
+
+# Check the summary of the model
+summary(model_glmm)
+
+
+
+```
+```{r}
+# Fit the model with only the random effect for 'id'
+model_glmm_no_zip <- glmer(tdrive ~ as.factor(day) + cdist_scaled + (1 | id),
+                           family = poisson(link = "log"), 
+                           data = dataset, 
+                           control = glmerControl(optimizer = "bobyqa"))
+
+summary(model_glmm_no_zip)
+
+```
+
+
+```{r}
+library(nlme)
+model10 <- lme(tdrive ~ as.factor(day) + cdist, 
+               random = ~1 | id, 
+               correlation = corExp(form = ~ cdist), 
+               data = dataset)
+
+```
+```{r}
+model11 <- lmer(tdrive ~ as.factor(day) + cdist + (cdist | id), data = dataset, REML = FALSE)
+
+```
+
+
+```{r}
+library(lme4)
+dataset$id<- as.factor(dataset$id)
+dataset$zip<- as.factor(dataset$zip)
+```
+
+```{r}
+
+
+model_hierarchical <- lme(
+  tdrive ~ as.factor(day),
+  random = ~1 | zip/id,
+  correlation = corExp(form = ~ cdist_jittered | zip/id),
+  data = dataset,
+  method = "REML"
+)
+model14 <- lme(tdrive ~ as.factor(day) + cdist, 
+               random = ~1 | id, 
+               correlation = corExp(form = ~ cdist_jittered), 
+               data = dataset)
+
+```
+```{r}
+model12 <- lmer(tdrive ~ as.factor(day) + poly(cdist, 2) + (1 | zip) + (1 | id), 
+                data = dataset, REML = FALSE)
+```
+```{r}
+BIC(model2, model3, model4, model5, model6, model7, model8, model_glmm, model11, model12, model_hierarchical, model14)
+```
+
+```{r}
+plot(fitted(model3), residuals(model3),
+     col = "blue",
+     pch = 16,
+     main = "Residuals vs. Fitted Values",
+     xlab = "Fitted Values",
+     ylab = "Residuals")
+abline(h = 0, col = "red", lty = 2, lwd = 2)
+```
+```{r}
+aggregated_data <- dataset %>%
+    group_by(zip, day) %>%
+    summarize(
+        mean_tdrive = mean(tdrive),
+        mean_cdist = mean(cdist)
+    )
+model10_agg <- lme(mean_tdrive ~ as.factor(day),
+                   random = ~1 | zip,
+                   correlation = corSpatial(form = ~mean_cdist),
+                   data = aggregated_data)
+
+```
+
+
+
